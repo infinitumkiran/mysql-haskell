@@ -27,6 +27,7 @@
           packages = {
             word24.source = inputs.word24;
             tcp-streams.source = inputs.tcp-streams;
+            regex-tdfa.source="1.3.2.5";
           };
 
           settings = {
