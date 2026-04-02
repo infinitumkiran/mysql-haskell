@@ -45,11 +45,13 @@ tests c = do
         , mySQLTypeBlob
         , mySQLTypeString
         , mySQLTypeString
+        , mySQLTypeJSON
         ]
 
     Just v1 <- Stream.read is1
     assertEqual "decode NULL values" v1
         [ MySQLInt32 0
+        , MySQLNull
         , MySQLNull
         , MySQLNull
         , MySQLNull
@@ -114,7 +116,8 @@ tests c = do
                 \__blob       = '12345678'                             ,\
                 \__text       = '韩冬真赞'                             ,\
                 \__enum       = 'foo'                                  ,\
-                \__set        = 'foo,bar' WHERE __id=0"
+                \__set        = 'foo,bar'                              ,\
+                \__value      = '{\"abc\": \"123\"}' WHERE __id=0"
 
     (_, is2) <- query_ c "SELECT * FROM test"
     Just v2 <- Stream.read is2
@@ -150,6 +153,7 @@ tests c = do
         , MySQLText "韩冬真赞"
         , MySQLText "foo"
         , MySQLText "foo,bar"
+        , MySQLJSON "{\"abc\": \"123\"}"
         ]
 
     Stream.skipToEof is2
@@ -255,6 +259,7 @@ tests c = do
         , MySQLText "韩冬真赞"
         , MySQLText "foo"
         , MySQLText "foo,bar"
+        , MySQLJSON "{\"abc\": \"123\"}"
         ]
 
     Stream.skipToEof is4
@@ -299,6 +304,7 @@ tests c = do
         , MySQLNull
         , MySQLText "foo"
         , MySQLText "foo,bar"
+        , MySQLJSON "{\"abc\": \"123\"}"
         ]
 
     Stream.skipToEof is5
@@ -343,6 +349,7 @@ tests c = do
         , MySQLNull
         , MySQLText "foo"
         , MySQLText "foo,bar"
+        , MySQLJSON "{\"abc\": \"123\"}"
         ]
 
     Stream.skipToEof is6

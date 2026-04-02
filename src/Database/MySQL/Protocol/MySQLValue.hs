@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -funbox-strict-fields #-}
+{-# LANGUAGE BangPatterns #-}
 
 {-|
 Module      : Database.MySQL.Protocol.MySQLValue
@@ -43,6 +44,7 @@ import qualified Data.ByteString                    as B
 import qualified Data.ByteString.Builder            as BB
 import           Data.ByteString.Builder.Scientific (FPFormat (..),
                                                      formatScientificBuilder)
+import qualified Data.ByteString                    as BS
 import qualified Data.ByteString.Char8              as BC
 import qualified Data.ByteString.Lazy               as L
 import qualified Data.ByteString.Lex.Fractional     as LexFrac
@@ -113,6 +115,7 @@ data MySQLValue
     | MySQLBytes         !ByteString
     | MySQLBit           !Word64
     | MySQLText          !Text
+    | MySQLJSON          !ByteString
     | MySQLNull
   deriving (Show, Eq, Generic)
 
@@ -139,6 +142,7 @@ putParamMySQLType (MySQLBytes        _)  = putFieldType mySQLTypeBlob     >> put
 putParamMySQLType (MySQLGeometry     _)  = putFieldType mySQLTypeGeometry >> putWord8 0x00
 putParamMySQLType (MySQLBit          _)  = putFieldType mySQLTypeLongLong >> putWord8 0x80
 putParamMySQLType (MySQLText         _)  = putFieldType mySQLTypeString   >> putWord8 0x00
+putParamMySQLType (MySQLJSON         _)  = putFieldType mySQLTypeJSON     >> putWord8 0x00
 putParamMySQLType MySQLNull              = putFieldType mySQLTypeNull     >> putWord8 0x00
 
 --------------------------------------------------------------------------------
@@ -189,6 +193,7 @@ getTextField f
         || t == mySQLTypeString     = (if isText then MySQLText . T.decodeUtf8 else MySQLBytes) <$> getLenEncBytes
 
     | t == mySQLTypeBit             = MySQLBit <$> (getBits =<< getLenEncInt)
+    | t == mySQLTypeJSON            = MySQLJSON <$> getLenEncBytes
 
     | otherwise                     = fail $ "Database.MySQL.Protocol.MySQLValue: missing text decoder for " ++ show t
   where
@@ -196,7 +201,7 @@ getTextField f
     isUnsigned = flagUnsigned (columnFlags f)
     isText = columnCharSet f /= 63
     intLexer bs = fst <$> LexInt.readSigned LexInt.readDecimal bs
-    fracLexer bs = fst <$> LexFrac.readSigned LexFrac.readDecimal bs
+    fracLexer bs = fst <$> LexFrac.readSigned readDecimalSafe bs
     dateParser bs = do
         (yyyy, rest) <- LexInt.readDecimal bs
         guard (not (B.null rest))
@@ -213,6 +218,30 @@ getTextField f
         (ss, _) <- LexFrac.readDecimal (B.tail rest')
         return (TimeOfDay hh mm ss)
 
+readDecimalSafe :: (Fractional a) => ByteString -> Maybe (a, ByteString)
+readDecimalSafe xs =
+    case LexInt.readDecimal xs of
+    Nothing          -> Nothing
+    Just (whole, ys) ->
+        case BS.uncons ys of
+        Nothing              -> justPair (fromInteger whole) BS.empty
+        Just (y0,ys0)
+            | isNotPeriod y0 -> justPair (fromInteger whole) ys
+            | otherwise      ->
+                case LexInt.readDecimal ys0 of
+                Nothing         -> justPair (fromInteger whole) ys
+                Just (part, zs) ->
+                    let base = 10 ^ (BS.length ys - 1 - BS.length zs)
+                        frac = (base * fromInteger whole + fromInteger part) / base -- saves us from 1 + 0.36 = 1.3599999999999999
+                    in justPair frac zs
+    where
+        {-# INLINE justPair #-}
+        justPair :: a -> b -> Maybe (a,b)
+        justPair !x !y = Just (x,y)
+
+        {-# INLINE isNotPeriod #-}
+        isNotPeriod :: Word8 -> Bool
+        isNotPeriod w = w /= 0x2E
 
 feedLenEncBytes :: FieldType -> (t -> b) -> (ByteString -> Maybe t) -> Get b
 feedLenEncBytes typ con parser = do
@@ -252,6 +281,7 @@ putTextField (MySQLGeometry  bs) = putInQuotes $ putByteString . escapeBytes $ b
 putTextField (MySQLBytes     bs) = putInQuotes $ putByteString . escapeBytes $ bs
 putTextField (MySQLText       t) = putInQuotes $
                                       putByteString . T.encodeUtf8 . escapeText $ t
+putTextField (MySQLJSON       bs) = putInQuotes $ putByteString . escapeBytes $ bs
 putTextField (MySQLBit        b) = do putBuilder "b\'"
                                       putBuilder . execPut $ putTextBits b
                                       putCharUtf8 '\''
@@ -377,13 +407,14 @@ getBinaryField f
         || t == mySQLTypeString       = if isText then MySQLText . T.decodeUtf8 <$> getLenEncBytes
                                                   else MySQLBytes <$> getLenEncBytes
     | t == mySQLTypeBit               = MySQLBit <$> (getBits =<< getLenEncInt)
+    | t == mySQLTypeJSON              = MySQLJSON <$> getLenEncBytes
     | otherwise                       = fail $ "Database.MySQL.Protocol.MySQLValue:\
                                                \ missing binary decoder for " ++ show t
   where
     t = columnType f
     isUnsigned = flagUnsigned (columnFlags f)
     isText = columnCharSet f /= 63
-    fracLexer bs = fst <$> LexFrac.readSigned LexFrac.readDecimal bs
+    fracLexer bs = fst <$> LexFrac.readSigned readDecimalSafe bs
     getYear :: Get Integer
     getYear = fromIntegral <$> getWord16le
     getInt8' :: Get Int
@@ -447,6 +478,7 @@ putBinaryField (MySQLGeometry bs)  = putLenEncBytes bs
 putBinaryField (MySQLBytes  bs)    = putLenEncBytes bs
 putBinaryField (MySQLBit    word)  = putWord64le word
 putBinaryField (MySQLText    t)    = putLenEncBytes (T.encodeUtf8 t)
+putBinaryField (MySQLJSON    bs)   = putLenEncBytes bs
 putBinaryField MySQLNull           = return ()
 
 putBinaryDay :: Day -> Put

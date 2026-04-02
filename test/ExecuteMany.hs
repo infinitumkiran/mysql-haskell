@@ -41,6 +41,7 @@ tests c = do
             \?     ,\
             \?     ,\
             \?     ,\
+            \?     ,\
             \?)"
             (replicate 50000
                 [ MySQLInt32 0
@@ -73,6 +74,7 @@ tests c = do
                 , MySQLText "韩冬真赞"
                 , MySQLText "foo"
                 , MySQLText "foo,bar"
+                , MySQLJSON "12345678"
                 ]
             )
     assertEqual "executeMany affected rows" (sum $ map okAffectedRows oks) 50000
